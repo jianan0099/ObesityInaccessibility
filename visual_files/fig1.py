@@ -6,6 +6,7 @@ import matplotlib.patches as mpatches
 import matplotlib as mpl
 from matplotlib.patches import ConnectionPatch
 import utils
+from collections import defaultdict
 
 # ---- input data -----
 path = 'data/fig1.xlsx'
@@ -19,6 +20,20 @@ no_diabetes = uptake_info_table.loc['no_diabetes']
 current_obesity = uptake_info_table.loc['current_obesity']
 no_obesity = uptake_info_table.loc['no_obesity']
 merged_cats = uptake_info_table.columns
+
+fig1B_SM = defaultdict(dict)
+elig_obesity = round(uptake_info_table.sum() * 100, 1)
+fig1B_SM['Eligible for obesity drugs'] = {'Overweight (%)': str(elig_obesity['Overweight']),
+                                          'Obesity (%)': str(elig_obesity['Obesity'])}
+elig_diabetes = round((current_diabetes + no_diabetes) * 100, 1)
+fig1B_SM['Eligible for diabetes drugs'] = {'Overweight (%)': str(elig_diabetes['Overweight']),
+                                           'Obesity (%)': str(elig_diabetes['Obesity'])}
+fig1B_SM['Currently using obesity drugs'] = {'Overweight (%)': str(round(current_obesity['Overweight'] * 100, 1)),
+                                             'Obesity (%)': str(round(current_obesity['Obesity'] * 100, 1))}
+fig1B_SM['Currently using diabetes drugs'] = {'Overweight (%)': str(round(current_diabetes['Overweight'] * 100, 1)),
+                                              'Obesity (%)': str(round(current_diabetes['Obesity'] * 100, 1))}
+fig1B_SM = pd.DataFrame(fig1B_SM).transpose()
+fig1B_SM.to_excel('data/SM_fig1B.xlsx')
 # fig C
 eligibility_among_insurance = {}
 eligibility_among_insurance_table = pd.read_excel(path, sheet_name='eligibility among insurance').to_dict()
@@ -126,10 +141,10 @@ ax2.set_xticks([0, 0.2, 0.4, 0.6, 0.8, 1], labels=[0, 20, 40, 60, 80, 100], font
 ax2.set_yticks(np.arange(len(merged_cats)), labels=merged_cats, font=font)
 
 handles = []
-handles.append(mpatches.Patch(facecolor=color_eligible_diabetes, label='Access through diabetes drugs'))
-handles.append(mpatches.Patch(facecolor=color_eligible_obesity, label='Access through obesity drugs'))
-handles.append(mpatches.Patch(edgecolor=dash_color, facecolor='white', hatch="//", label='Current access'))
-plt.legend(handles=handles, frameon=False, fontsize=font['size'])
+handles.append(mpatches.Patch(facecolor=color_eligible_diabetes, label='Eligible for diabetes/obesity drugs'))
+handles.append(mpatches.Patch(facecolor=color_eligible_obesity, label='Eligible only for obesity drugs'))
+handles.append(mpatches.Patch(edgecolor=dash_color, facecolor='white', hatch="//", label='Current uptake'))
+plt.legend(handles=handles, frameon=False, fontsize=font['size'], loc='upper right', bbox_to_anchor=(1.03, 1))
 
 # zoom in lines
 con = ConnectionPatch(xyA=(ov1_x, ov1_y), xyB=(0, 1), coordsA="data", coordsB=ax2.get_xaxis_transform(),

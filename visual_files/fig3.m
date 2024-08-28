@@ -25,84 +25,66 @@ clim([min_ max_])
 
 hold on
 dx = 0.1;
-dy = 0.045;
+dy = 0.05;
 for i=1:length(states)
     state = states(i);
     state = state{1,1};
     switch state
-        case 'District of Columbia'
-            text(6.088872053667636,2.970460276414367,0, state, FontSize=font_size-3);
-
-        case 'Florida'
-            text(7.643338099787916,3.082884234398095,0, state, FontSize=font_size-3);
-        
-        case 'Hawaii'
-        text(6.705499862182752,2.673149550750514,0, state, FontSize=font_size-3);
-        case 'Vermont'
-            text(6.790939466699911,2.474140725170681,0, state, FontSize=font_size-3);
-        case 'Massachusetts'
-            text(7.871446412782623,2.540881167891565,0, state, FontSize=font_size-3);
-        case 'Montana'
-            text(8.190035878503236,2.846614675569804,0, state, FontSize=font_size-3);
-        case 'New Hampshire'
-            text(8.64487946298122,2.381487290615718,0, state, FontSize=font_size-3);
-        case 'South Carolina'
-            text(8.064573583362355,4.529960678722151,0, state, FontSize=font_size-3);
-        case 'Georgia'
-            text(9.038934826692865,4.026111384646409,0, state, FontSize=font_size-3);
-        case  'New Jersey'
-            text(7.64112934620815,3.232773105221378,0, state, FontSize=font_size-3);
-        case 'Delaware'
-            text(11.189227630113262,3.890195899263739,0, state, FontSize=font_size-3);
-        case 'Rhode Island'
-            text(7.822525446193488,3.330011239017002,0, state, FontSize=font_size-3);
-        case 'Nevada'
-            text(8.537926394756104,3.817178361193255,0, state, FontSize=font_size-3);
-        case 'Washington'
-            text(8.518016239377793,2.965409225764699,0, state, FontSize=font_size-3);
-        case 'Louisiana'
-            text(10.533554303536093,4.466640324574106,0, state, FontSize=font_size-3);
-        case 'South Dakota'
-            text(10.967867526082262,3.587947749528214,0, state, FontSize=font_size-3);
         case 'Mississippi'
-            text(11.371758870670547,5.011946711515112,0, state, FontSize=font_size-3);
-        case 'Pennsylvania'
-            text(9.081038637830066,3.417764728585126,0, state, FontSize=font_size-3);
-        case 'Missouri'
-            text(9.872866552896514,3.643586297099151,0, state, FontSize=font_size-3);
-        case 'Nebraska'
-            text(11.063629801450109,3.301453648613165,0, state, FontSize=font_size-3);
-        case 'Kansas'
-            text(10.536258171592085,3.802620231985043,0, state, FontSize=font_size-3);
-        case 'Wisconsin'
-            text(11.375925609621998,2.834388308721176,0, state, FontSize=font_size-3);
-        case 'North Carolina'
-            text(8.874929070414804,3.906257030950412,0, state, FontSize=font_size-3);
-        case 'Oregon'
-            text(8.759214460883433,3.117949401753224,0, state, FontSize=font_size-3);
-        case 'Maryland'
-            text(9.530492782372145,3.18221735119998,0, state, FontSize=font_size-3);
-        case 'Michigan'
-            text(10.649602124080168,3.183305511480983,0, state, FontSize=font_size-3);
-        case 'Arizona'
-            text(8.893771283620623,3.530360237870244,0, state, FontSize=font_size-3);
-        case  'Illinois'
-            text(9.007797693012526,3.660062601768848,0, state, FontSize=font_size-3);
-        case 'Virginia'
-            text(9.644837647185517,3.803764101048497,0, state, FontSize=font_size-3);
+            text(10.87500079485211,4.864980851279745,0, state, FontSize=font_size-3);
         case 'Alabama'
-            text(10.376681098129065,5.144890038809831,0, state, FontSize=font_size-3);
+            text(9.545401116467694,4.905944803076476,0, state, FontSize=font_size-3);
+        case 'South Carolina'
+            text(7.859550259582159,4.394243187866741,0, state, FontSize=font_size-3);
+        case 'Louisiana'
+            text(9.669711433065446,4.242471723431225,0, state, FontSize=font_size-3);
+        case 'Georgia'
+            text(8.717761597936864,3.901716123307664,0, state, FontSize=font_size-3);
+        case 'Missouri'
+            text(9.686066424391434,3.409734106528833,0, state, FontSize=font_size-3);
+        case 'Ohio'
+            text(10.233315534533135,3.987304333811341,0, state, FontSize=font_size-3);
+        case 'Indiana'
+            text(10.560593445116316,3.905208888591259,0, state, FontSize=font_size-3);
+        case 'Minnesota'
+            text(9.947426734677137,2.721720206285851,0, state, FontSize=font_size-3);
+        case 'North Carolina'
+            text(7.819776987199639,3.773382556944213,0, state, FontSize=font_size-3);
+        case 'Illinois'
+            text(8.63675086530072,3.543363423903065,0, state, FontSize=font_size-3);
+        case 'Pennsylvania'
+            text(8.723944018921717,3.297133996168238,0, state, FontSize=font_size-3);
+        case 'Rhode Island'
+            text(7.583410220429982,3.217766219929374,0, state, FontSize=font_size-3);
+        case 'Florida'
+            text(7.659960775414024,2.979723621696111,0, state, FontSize=font_size-3);
+        case 'California'
+            text(6.565347637694885,3.757056226787058,0, state, FontSize=font_size-3);
+        case 'District of Columbia'
+            text(6.039493996207853,2.907810113993359,0, state, FontSize=font_size-3);
+        case 'Massachusetts'
+            text(7.521204452726636,2.543083799422244,0, state, FontSize=font_size-3);
+        case 'Alaska'
+            text(9.371797458616017,2.535331033486349,0, state, FontSize=font_size-3);
+        case 'Vermont'
+            text(6.617081497281675,2.405915952502603,0, state, FontSize=font_size-3);
+        case 'West Virginia'
+            text(10.932334406657617,4.461293073476932,0, state, FontSize=font_size-3);
+        case 'Connecticut'
+            text(7.047904795564887,3.342495187271708,0, state, FontSize=font_size-3);
+        case 'North Dakota'
+            text(10.437753269862805,3.297353257385064,0, state, FontSize=font_size-3);
         otherwise
-            if obesity_drug_death_per(i)<9.6
-            text(obesity_drug_death_per(i)-9*dx, diabetes_drug_death_per(i)+dy, state, FontSize=font_size-3);
+            if obesity_drug_death_per(i)<9.3
+                text(obesity_drug_death_per(i)-length(state)/1.04*dx, diabetes_drug_death_per(i), state, FontSize=font_size-3);
             else
-                text(obesity_drug_death_per(i)+dx, diabetes_drug_death_per(i)+dy, state, FontSize=font_size-3);
+                text(obesity_drug_death_per(i)+dx, diabetes_drug_death_per(i), state, FontSize=font_size-3);
             end
     end
 
 
 end
-xlim([6 13])
+xlim([6 12])
 xlabel('Averted death per capita (obesity)')
 ylabel('Averted death per capita (diabetes)')
 

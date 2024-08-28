@@ -6,10 +6,263 @@ from collections import defaultdict
 from scipy.stats import gaussian_kde
 from obesity_calculations import ObesityCal
 from collections import Counter
+import os
 
 results_saving_path = 'visual_files/data/'
 bmi_cats_labels = ['Underweight', 'Normal', 'Overweight-I', 'Overweight-II', 'Obesity-I', 'Obesity-II', 'Obesity-III',
                    'All']
+
+
+def get_basic_uptake_info(obesity_cal: ObesityCal, uptake_summary):
+    num_samples = len(uptake_summary['curr_dia']['18 years'])
+    age_g_info = {'18–64': ['18 years', '19 years', '20–29', '30–39', '40–49', '50–59', '60–69'],
+                  '65 and over': ['60–69', '70–79', '80 and over']}
+    basic_uptake_info = {}
+    for access in ['curr', 'elig']:
+        uptake_info = defaultdict(dict)
+        uptake_info['18 and over']['Diabetes'] = np.zeros(num_samples)
+        uptake_info['18 and over']['Obesity'] = np.zeros(num_samples)
+        for age_cat in age_g_info:
+            uptake_info[age_cat]['Diabetes'] = np.zeros(num_samples)
+            uptake_info[age_cat]['Obesity'] = np.zeros(num_samples)
+            for age_g in age_g_info[age_cat]:
+                if age_g == '60–69':
+                    uptake_info[age_cat]['Diabetes'] += np.array(uptake_summary[access + '_dia'][age_g]) / 2 / obesity_cal.base_adherence_d
+                    uptake_info[age_cat]['Obesity'] += np.array(uptake_summary[access + '_obe'][age_g]) / 2 / obesity_cal.base_adherence_non_d
+                    # sum
+                    uptake_info['18 and over']['Diabetes'] += np.array(uptake_summary[access + '_dia'][age_g]) / 2 / obesity_cal.base_adherence_d
+                    uptake_info['18 and over']['Obesity'] += np.array(uptake_summary[access + '_obe'][age_g]) / 2 / obesity_cal.base_adherence_non_d
+                else:
+                    uptake_info[age_cat]['Diabetes'] += np.array(uptake_summary[access + '_dia'][age_g]) / obesity_cal.base_adherence_d
+                    uptake_info[age_cat]['Obesity'] += np.array(uptake_summary[access + '_obe'][age_g]) / obesity_cal.base_adherence_non_d
+                    # sum
+                    uptake_info['18 and over']['Diabetes'] += np.array(uptake_summary[access + '_dia'][age_g]) / obesity_cal.base_adherence_d
+                    uptake_info['18 and over']['Obesity'] += np.array(uptake_summary[access + '_obe'][age_g]) / obesity_cal.base_adherence_non_d
+
+        if access == 'curr':
+            curr_obesity_death_weight_by_age = curr_obe_death_weight_by_age(obesity_cal)
+            uptake_info['18–64']['Obesity'] = uptake_info['18 and over']['Obesity'] * curr_obesity_death_weight_by_age[
+                '18–64']
+            uptake_info['65 and over']['Obesity'] = (uptake_info['18 and over']['Obesity'] *
+                                                     curr_obesity_death_weight_by_age['65 and over'])
+        basic_uptake_info[access] = uptake_info
+    return basic_uptake_info
+
+
+def sample_drug_elig_cal(pop_bmi_distribution, d2_among_bmi):
+    elig_dia_frac = np.sum(pop_bmi_distribution[:, -5:] * d2_among_bmi[:, -5:], axis=1)
+    elig_obe_frac = np.sum(pop_bmi_distribution[:, -3:] * (1 - d2_among_bmi[:, -3:]), axis=1)
+    return elig_dia_frac + elig_obe_frac
+
+
+def uptake_CI_interval(obesity_cal: ObesityCal, info, group, samples, death_results, curr_info, elig_info, confidence):
+    curr_pop_elig, elig_pop_elig = get_pop_eligible_sample(obesity_cal, info, group, samples, death_results)
+    return {'curr %': utils.mean_confidence_interval(curr_info / curr_pop_elig * 100, confidence),
+            'elig %': utils.mean_confidence_interval(elig_info / elig_pop_elig * 100, confidence)}
+
+
+def full_uptake_info(obesity_cal: ObesityCal, basic_uptake_info, info, group, samples, death_results,
+                     curr_obe_share_of_private, confidence):
+    if info == 'Age':
+        return uptake_CI_interval(obesity_cal, info, group,
+                                  samples, death_results,
+                                  basic_uptake_info['curr'][group]['Diabetes'] +
+                                  basic_uptake_info['curr'][group]['Obesity'],
+                                  basic_uptake_info['elig'][group]['Diabetes'] +
+                                  basic_uptake_info['elig'][group]['Obesity'],
+                                  confidence=confidence)
+    if info == 'Drug':
+        return uptake_CI_interval(obesity_cal, info, group,
+                                  samples, death_results,
+                                  basic_uptake_info['curr']['18 and over'][group],
+                                  basic_uptake_info['elig']['18 and over'][group],
+                                  confidence=confidence)
+    if info == 'Insurance':
+        if group == 'Medicare':
+            return uptake_CI_interval(obesity_cal, info, group,
+                                      samples, death_results,
+                                      basic_uptake_info['curr']['65 and over']['Diabetes'] +
+                                      basic_uptake_info['curr']['65 and over']['Obesity'],
+                                      basic_uptake_info['elig']['65 and over']['Diabetes'] +
+                                      basic_uptake_info['elig']['65 and over']['Obesity'],
+                                      confidence=confidence)
+        else:
+            weight_by_insurance = total_death_share_under65_by_insurance(obesity_cal)
+            curr_under65_dia = basic_uptake_info['curr']['18–64']['Diabetes']
+            curr_under65_obe = basic_uptake_info['curr']['18–64']['Obesity']
+            elig_under65_dia = basic_uptake_info['elig']['18–64']['Diabetes']
+            elig_under65_obe = basic_uptake_info['elig']['18–64']['Obesity']
+
+            curr_dia = curr_under65_dia * weight_by_insurance['curr_diabetes'][group]
+            elig_dia = elig_under65_dia * weight_by_insurance['diabetes'][group]
+            elig_obe = elig_under65_obe * weight_by_insurance['obesity'][group]
+
+            if group == 'Uninsured':
+                curr_obe = 0
+            if group == 'Private':
+                curr_obe = curr_under65_obe * curr_obe_share_of_private
+            if group == 'Medicaid':
+                curr_obe = curr_under65_obe * (1 - curr_obe_share_of_private)
+            return uptake_CI_interval(obesity_cal, info, group, samples, death_results,
+                                      curr_dia + curr_obe, elig_dia + elig_obe, confidence=confidence)
+
+
+def sample_insurance_under65_elig_frac(obesity_cal: ObesityCal,
+                                       samples_bmi_distribution, samples_d2_among_bmi,
+                                       obesity_odds, insurance_dict_norm):
+    samples_obesity_prevalence = np.sum(samples_bmi_distribution[:, -3:], axis=1)
+    samples_diabetes_prevalence = np.sum(samples_bmi_distribution * samples_d2_among_bmi, axis=1)
+    samples_overweight_among_d = (np.sum(samples_bmi_distribution[:, -5:-3] * samples_d2_among_bmi[:, -5:-3], axis=1) /
+                                  samples_diabetes_prevalence)
+    samples_obesity_among_d = (np.sum(samples_bmi_distribution[:, -3:] * samples_d2_among_bmi[:, -3:], axis=1) /
+                                  samples_diabetes_prevalence)
+    samples_obesity_prevalence_insurance = condition_prevalence_among_insurance(obesity_odds, insurance_dict_norm,
+                                                                                samples_obesity_prevalence)
+    samples_elig_frac_insurance = {}
+    for insurance in samples_obesity_prevalence_insurance:
+        _, _, elig_frac = obesity_cal.eligible_frac_cal(samples_obesity_prevalence_insurance[insurance],
+                                                        samples_diabetes_prevalence,
+                                                        samples_overweight_among_d, samples_obesity_among_d)
+        samples_elig_frac_insurance[insurance] = elig_frac
+    return samples_elig_frac_insurance
+
+
+def get_pop_eligible_sample(obesity_cal: ObesityCal, info, group, samples, death_results):
+    curr_d2_among_bmi = np.array(samples['samples_d2_among_d_curr'])
+    elig_d2_among_bmi = np.array(samples['samples_d2_among_d_elig'])
+    samples_bmi_distribution = np.array(death_results['Dis_bmi_noAccess_by_age']['All'])
+    age_distribution = np.array(death_results['age_distribution'])
+    samples_age_bmi_distribution = death_results['Dis_bmi_noAccess_by_age']
+    curr_pop_eligible = np.zeros(obesity_cal.sampling_times)
+    elig_pop_eligible = np.zeros(obesity_cal.sampling_times)
+
+    if info == 'Age':
+        age_groups = ['18 years', '19 years',
+                      '20–29', '30–39', '40–49', '50–59', '60–64', '65–69', '70–79',
+                      '80 and over']
+        age_groups_merged = {'18 and over': age_groups,
+                             '18–64': age_groups[:-3],
+                             '65 and over': age_groups[-3:]}
+
+        for age_g in age_groups_merged[group]:
+            if age_g in ['60–64', '65–69']:
+                age_g_index = obesity_cal.age_groups.index('60–69')
+                age_g_p = np.array(age_distribution[:, age_g_index])/2
+                age_bmi_distribution = np.array(samples_age_bmi_distribution['60–69'])
+            else:
+                age_g_index = obesity_cal.age_groups.index(age_g)
+                age_g_p = np.array(age_distribution[:, age_g_index])
+                age_bmi_distribution = np.array(samples_age_bmi_distribution[age_g])
+
+            curr_elig_frac = sample_drug_elig_cal(age_bmi_distribution, curr_d2_among_bmi)
+            elig_elig_frac = sample_drug_elig_cal(age_bmi_distribution, elig_d2_among_bmi)
+
+            curr_pop_eligible += obesity_cal.population_sample_size * age_g_p * curr_elig_frac
+            elig_pop_eligible += obesity_cal.population_sample_size * age_g_p * elig_elig_frac
+        return curr_pop_eligible, elig_pop_eligible
+    if info == 'Drug':
+        for bmi_cat_i, bmi_cat in enumerate(obesity_cal.bmi_categorization):
+            if bmi_cat not in ['Underweight', 'Normal']:
+                if group == 'Diabetes':
+                    if bmi_cat in ['Overweight-grade1', 'Overweight-grade2',
+                                   'Obesity-grade1', 'Obesity-grade2', 'Obesity-grade3']:
+                        curr_bmi_cat_elig_frac = curr_d2_among_bmi[:, bmi_cat_i]
+                        elig_bmi_cat_elig_frac = elig_d2_among_bmi[:, bmi_cat_i]
+                if group == 'Obesity':
+                    if bmi_cat in ['Overweight-grade1', 'Overweight-grade2']:
+                        curr_bmi_cat_elig_frac = np.zeros(obesity_cal.sampling_times) * 1.0
+                        elig_bmi_cat_elig_frac = np.zeros(obesity_cal.sampling_times) * 1.0
+                    elif bmi_cat in ['Obesity-grade1', 'Obesity-grade2', 'Obesity-grade3']:
+                        curr_bmi_cat_elig_frac = 1-curr_d2_among_bmi[:, bmi_cat_i]
+                        elig_bmi_cat_elig_frac = 1-elig_d2_among_bmi[:, bmi_cat_i]
+                curr_pop_eligible += obesity_cal.population_sample_size * samples_bmi_distribution[:, bmi_cat_i] * curr_bmi_cat_elig_frac
+                elig_pop_eligible += obesity_cal.population_sample_size * samples_bmi_distribution[:, bmi_cat_i] * elig_bmi_cat_elig_frac
+        return curr_pop_eligible, elig_pop_eligible
+    if info == 'Insurance':
+        insurance_dict_norm, obesity_odds = data_process.get_insurance_data_below_65()
+        if group == 'Medicare':
+            return get_pop_eligible_sample(obesity_cal, 'Age', '65 and over', samples, death_results)
+        else:
+            curr_elig_frac_insurance = sample_insurance_under65_elig_frac(obesity_cal, samples_bmi_distribution,
+                                                                          curr_d2_among_bmi,
+                                                                          obesity_odds,
+                                                                          insurance_dict_norm)
+            elig_elig_frac_insurance = sample_insurance_under65_elig_frac(obesity_cal, samples_bmi_distribution,
+                                                                          elig_d2_among_bmi,
+                                                                          obesity_odds,
+                                                                          insurance_dict_norm)
+            insurance_map = {'Medicaid': 'public',
+                             'Private': 'private',
+                             'Uninsured': 'none'}
+            elder_age_index = obesity_cal.age_groups.index('60–69')
+            under65_pop_frac = (np.sum(age_distribution[:, :elder_age_index], axis=1) +
+                                age_distribution[:, elder_age_index]/2)
+            insurance_dict_norm, obesity_odds = data_process.get_insurance_data_below_65()
+            return (obesity_cal.population_sample_size * under65_pop_frac * insurance_dict_norm[insurance_map[group]] *
+                    curr_elig_frac_insurance[insurance_map[group]],
+                    obesity_cal.population_sample_size * under65_pop_frac * insurance_dict_norm[insurance_map[group]] *
+                    elig_elig_frac_insurance[insurance_map[group]])
+
+
+def get_pop_eligible(obesity_cal: ObesityCal, info, group):
+    if info == 'Age':
+        age_groups = ['18 years', '19 years',
+                      '20–29', '30–39', '40–49', '50–59', '60–64', '65–69', '70–79',
+                      '80 and over']
+        age_groups_merged = {'18 and over': age_groups,
+                             '18–64': age_groups[:-3],
+                             '65 and over': age_groups[-3:]}
+        age_distribution = pd.read_excel(results_saving_path + 'eligibility_info.xlsx',
+                                         sheet_name='age distribution').iloc[0]
+        eligibility_among_ages = pd.read_excel(results_saving_path + 'eligibility_info.xlsx',
+                                               sheet_name='eligible frac among age').iloc[0]
+        pop_eligible = 0
+        for age_g in age_groups_merged[group]:
+            age_g_p = age_distribution[age_g]
+            elig_frac_among_age = eligibility_among_ages[age_g]
+            pop_eligible += obesity_cal.P * age_g_p * elig_frac_among_age
+        return pop_eligible
+    if info == 'Drug':
+        elig_by_drug, _, _ = obesity_cal.eligible_pop()
+        pop_eligible = 0
+        for bmi_cat in obesity_cal.ecdf_bmi_distribution:
+            if group == 'Diabetes':
+                bmi_cat_elig_frac = elig_by_drug['Both'][bmi_cat] + elig_by_drug['Only d2'][bmi_cat]
+            if group == 'Obesity':
+                bmi_cat_elig_frac = elig_by_drug['Only obesity'][bmi_cat]
+            pop_eligible += obesity_cal.P * obesity_cal.ecdf_bmi_distribution[bmi_cat] * bmi_cat_elig_frac
+        return pop_eligible
+    if info == 'Insurance':
+        if not os.path.exists(results_saving_path + '/SM_insurance_elig_info.xlsx'):
+            insurance_eligibility_info_df = insurance_eligibility_summary(obesity_cal)
+        else:
+            insurance_eligibility_info_df = pd.read_excel(results_saving_path + '/SM_insurance_elig_info.xlsx',
+                                                          header=1, index_col=0)
+        return (obesity_cal.P * insurance_eligibility_info_df[group]['Share of Population'] *
+                insurance_eligibility_info_df[group]['Eligible'])
+
+
+def uptake_eligibility_main(obesity_cal: ObesityCal, samples, death_results, uptake_summary,
+                            curr_obe_share_of_private, confidence, scenario):
+    basic_uptake_info = get_basic_uptake_info(obesity_cal, uptake_summary)
+    uptake_eligibility = defaultdict(list)
+    for info, group in [('Age', '18 and over'), ('Age', '18–64'), ('Age', '65 and over'),
+                        ('Drug', 'Diabetes'), ('Drug', 'Obesity'),
+                        ('Insurance', 'Private'), ('Insurance', 'Medicaid'),
+                        ('Insurance', 'Medicare'), ('Insurance', 'Uninsured')]:
+        CI_info = full_uptake_info(obesity_cal, basic_uptake_info,
+                                   info, group, samples, death_results,
+                                   curr_obe_share_of_private, confidence)
+        uptake_eligibility['Info'].append(info)
+        uptake_eligibility['Group'].append(group)
+        group_pop_elig = round(get_pop_eligible(obesity_cal, info, group))
+        uptake_eligibility['Eligible population (raw)'].append(str(group_pop_elig))
+        uptake_eligibility['Eligible population'].append(utils.number_with_comma(group_pop_elig))
+        uptake_eligibility['Current uptake (%)'].append(str(round(CI_info['curr %'][0], 1)))
+        uptake_eligibility['Expanded uptake (%)'].append(str(round(CI_info['elig %'][0], 1)))
+    uptake_eligibility = pd.DataFrame(uptake_eligibility)
+    utils.save_dfs(results_saving_path + 'table1_supple' + scenario + '.xlsx',
+                   [uptake_eligibility], ['uptake_eligibility'], [False])
 
 
 def add_mortality_info(mortality_info, info, group, death_data_curr, death_data_elig, confidence):
@@ -32,7 +285,6 @@ def curr_obe_death_weight_by_age(obesity_cal: ObesityCal):
                               '30–49': ['30–39', '40–49'],
                               '50–64': ['50–59', '60–64'],
                               '65 and over': ['65–69', '70–79', '80 and over']}
-    obesity_cal.init_drug_info('0', 'sema')
     curr_obesity_death_weight_by_age = {}
     obe_death_weight_all = 0
     # ------- percent_under_65 and percent_over_65 ---------
@@ -79,6 +331,7 @@ def distribute_curr_obe_death_under65_by_insurance(curr_death_under_65, share_of
 def total_death_share_under65_by_insurance(obesity_cal):
     dia_curr_access = {'Medicaid': 1, 'Private': 1, 'Uninsured': 0}
     insurance_eligibility_info_df = insurance_eligibility_summary(obesity_cal)
+    healthcare_access_by_insurance = obesity_cal.under65_healthcare_usual_access
     obe_death_weight_by_insurance = {}
     obe_death_weight_all = 0
     dia_death_weight_by_insurance = {}
@@ -88,12 +341,14 @@ def total_death_share_under65_by_insurance(obesity_cal):
 
     for insurance in ['Medicaid', 'Private', 'Uninsured']:
         obe_death_weight = (insurance_eligibility_info_df.loc['Share of Population'][insurance] *
-                            insurance_eligibility_info_df.loc['Eligible-obesity'][insurance])
+                            insurance_eligibility_info_df.loc['Eligible-obesity'][insurance] *
+                            healthcare_access_by_insurance[insurance])
         obe_death_weight_all += obe_death_weight
         obe_death_weight_by_insurance[insurance] = obe_death_weight
 
         dia_death_weight = (insurance_eligibility_info_df.loc['Share of Population'][insurance] *
-                            insurance_eligibility_info_df.loc['Eligible-diabetes'][insurance])
+                            insurance_eligibility_info_df.loc['Eligible-diabetes'][insurance] *
+                            healthcare_access_by_insurance[insurance])
         dia_death_weight_all += dia_death_weight
         dia_death_weight_by_insurance[insurance] = dia_death_weight
 
@@ -450,13 +705,33 @@ def uptake_scenario_analysis(obesity_cal, uptake_info):
 
 
 def fig1(obesity_cal: ObesityCal):
+    # ----- ecdf bmi distribution -------------------
+    mu_no_drug = obesity_cal.cal_mu_all_bmi_no_drug(obesity_cal.ecdf_bmi_distribution, version='dict')
+    ecdf_bmi_distribution_array = obesity_cal.transfer_bmi_info_to_array(obesity_cal.ecdf_bmi_distribution)
+
+    # -------- death share -------------------------------
+    _, _, death_share_by_bmi = obesity_cal.death_num_cal(ecdf_bmi_distribution_array, ecdf_bmi_distribution_array,
+                                                         obesity_cal.P)
+    death_percentage = {}
+    for i in range(obesity_cal.num_bmi_cats):
+        bmi_cat = obesity_cal.bmi_categorization[i]
+        death_percentage[bmi_cat] = death_share_by_bmi[i]
+
     # -------- eligibility across age -------------------
-    _, eligibility_frac_among_age, age_distribution = eligibility_across_ages(obesity_cal)
+    eligible_by_age, eligibility_frac_among_age, age_distribution = eligibility_across_ages(obesity_cal)
     age_groups = {'18–29': ['18 years', '19 years', '20–29'],
                   '30–49': ['30–39', '40–49'],
                   '50–64': ['50–59', '60–64'],
                   '18–64': ['18 years', '19 years', '20–29', '30–39', '40–49', '50–59', '60–64'],
                   '65 and over': ['65–69', '70–79', '80 and over']}
+    eligible_by_age_merged = defaultdict(float)
+    for age in age_groups:
+        for detailed_age in age_groups[age]:
+            eligible_by_age_merged[age] += eligible_by_age[detailed_age]['norm']
+    SM_eligible_by_age_merged = {'Age group': 'Percentage(%)'}
+    for age in eligible_by_age_merged:
+        if age != '18–64':
+            SM_eligible_by_age_merged[age] = round(eligible_by_age_merged[age] * 100, 1)
 
     eligible_among_age_merged = defaultdict(float)
     for age in age_groups:
@@ -487,51 +762,83 @@ def fig1(obesity_cal: ObesityCal):
     utils.save_dfs(results_saving_path + 'fig1.xlsx',
                    [
                        pd.DataFrame(obesity_cal.ecdf_bmi_distribution, index=[0]),
+                       pd.DataFrame(death_percentage, index=[0]),
                        pd.DataFrame(obesity_cal.drug_eligibility),
                        pd.DataFrame(drug_uptake_info, index=[0]),
+                       pd.DataFrame(eligible_by_age_merged, index=[0]),
+                       pd.DataFrame(SM_eligible_by_age_merged, index=[0]),
+                       pd.DataFrame(eligible_among_age_merged, index=[0]),
+                       obesity_cal.ecdf_age_group_bmi_distribution,
+                       obesity_cal.ecdf_sex_age_group_bmi_distribution,
+                       pd.DataFrame(mu_no_drug, index=[0]),
                        pd.DataFrame({'total_eligible_frac': obesity_cal.total_eligible_frac}, index=[0]),
                        uptake_scenario_info,
+                       pd.DataFrame({'uptake_among_eligible': uptake_among_eligible}, index=[0]),
                        pd.DataFrame(elig_frac_among_insurance, index=[0])
                    ],
-                   ['bmi distribution', 'eligibility', 'uptake',
-                    'total_eligible', 'uptake_scenario_info', 'eligibility among insurance'],
-                   [False, True, False, False, True, False])
+                   ['bmi distribution', 'death by bmi', 'eligibility', 'uptake', 'eligibility by age',
+                    'eligibility by age (SM)', 'eligibility among age', 'age-bmi', 'sex-age-bmi', 'mu by bmi',
+                    'total_eligible', 'uptake_scenario_info', 'uptake_among_eligible', 'eligibility among insurance'],
+                   [False, False, True, False, False, False, False, True, True, False, False, True, False, False])
 
 
-def fig2(min_bmi, max_bmi, samples_base, sampling_results_base, samples_hypo, sampling_results_hypo):
+def fig2_scenario(min_bmi, max_bmi, samples, sampling_results, scenario, access_info):
+    if access_info == 'no_access':
+        bmi_value_list = samples['samples_no_access_BMI']
+        bmi_distribution = sampling_results['Dis_bmi_noAccess_by_age']
+    if access_info == 'current':
+        bmi_value_list = samples['samples_current_BMI']
+        bmi_distribution = sampling_results['Dis_bmi_curr_by_age']
+    if access_info == 'eligible':
+        bmi_value_list = samples['samples_eligible_BMI']
+        bmi_distribution = sampling_results['Dis_bmi_elig_by_age']
+
     # value distribution
     bmi_d = np.linspace(min_bmi, max_bmi, 1000)
-    no_access_bmi_density_base = bmi_value_distribution_average(bmi_d, samples_base['samples_no_access_BMI'])
-    current_bmi_density_base = bmi_value_distribution_average(bmi_d, samples_base['samples_current_BMI'])
-    eligible_bmi_density_base = bmi_value_distribution_average(bmi_d, samples_base['samples_eligible_BMI'])
-    eligible_bmi_density_hypo = bmi_value_distribution_average(bmi_d, samples_hypo['samples_eligible_BMI'])
+    bmi_density = bmi_value_distribution_average(bmi_d, bmi_value_list)
+
+    # save distribution
     mean_value = {'x': bmi_d,
-                  'mean_no_access': np.mean(np.array(no_access_bmi_density_base), axis=0),
-                  'mean_current': np.mean(np.array(current_bmi_density_base), axis=0),
-                  'mean_eligible': np.mean(np.array(eligible_bmi_density_base), axis=0),
-                  'mean_eligible_hypo': np.mean(np.array(eligible_bmi_density_hypo), axis=0)}
+                  'mean': np.mean(np.array(bmi_density), axis=0)}
+
     # cat distribution
-    no_access_bmi_cat_distribution = bmi_cat_distribution_average(
-        sampling_results_base['Dis_bmi_noAccess_by_age'])
-    current_bmi_cat_distribution = bmi_cat_distribution_average(
-        sampling_results_base['Dis_bmi_curr_by_age'])
-    eligible_bmi_cat_distribution = bmi_cat_distribution_average(
-        sampling_results_base['Dis_bmi_elig_by_age'])
-    eligible_bmi_cat_distribution_hypo = bmi_cat_distribution_average(
-        sampling_results_hypo['Dis_bmi_elig_by_age'])
+    bmi_cat_distribution = bmi_cat_distribution_average(bmi_distribution)
+
+    # save results
+    utils.save_dfs(results_saving_path + 'fig2_' + scenario + '_' + access_info + '.xlsx',
+                   [pd.DataFrame(mean_value), pd.DataFrame(bmi_cat_distribution)],
+                   ['mean', 'bmi_distribution'],
+                   [False, False])
+
+
+def fig2(min_bmi, max_bmi, scenarios_info, if_recal=False):
+    distribution_scenarios = [('base', 'no_access'), ('base', 'current'), ('base', 'eligible'),
+                              ('hypo', 'eligible')]
+    value_distribution_data = {}
+    for d_scenario in distribution_scenarios:
+        scenario, access_info = d_scenario[0], d_scenario[1]
+        s_info = scenarios_info[scenario]
+        distribution_data_path = results_saving_path + 'fig2_' + scenario + '_' + access_info + '.xlsx'
+        if not if_recal:
+            if not os.path.exists(distribution_data_path):
+                fig2_scenario(min_bmi, max_bmi, s_info['samples'], s_info['sampling_results'], scenario, access_info)
+        else:
+            fig2_scenario(min_bmi, max_bmi, s_info['samples'], s_info['sampling_results'], scenario, access_info)
+        value_distribution_data[d_scenario] = pd.read_excel(distribution_data_path,
+                                                            'mean')['mean'].tolist()
+    # save distribution
+    mean_value = {'x': np.linspace(min_bmi, max_bmi, 1000),
+                  'mean_no_access': value_distribution_data[('base', 'no_access')],
+                  'mean_current': value_distribution_data[('base', 'current')],
+                  'mean_eligible': value_distribution_data[('base', 'eligible')],
+                  'mean_eligible_hypo': value_distribution_data[('hypo', 'eligible')]
+                  }
+
     # save results
     utils.save_dfs(results_saving_path + 'fig2.xlsx',
-                   [
-                       pd.DataFrame(mean_value),
-                       pd.DataFrame(no_access_bmi_cat_distribution),
-                       pd.DataFrame(current_bmi_cat_distribution),
-                       pd.DataFrame(eligible_bmi_cat_distribution),
-                       pd.DataFrame(eligible_bmi_cat_distribution_hypo)
-                   ],
-                   ['mean',
-                    'no_access_bmi_distribution', 'current_bmi_distribution', 'eligible_bmi_distribution',
-                    'eligible_hypo_bmi_distribution'],
-                   [False, False, False, False, False])
+                   [pd.DataFrame(mean_value)],
+                   ['mean'],
+                   [False])
 
 
 def eligibility_across_ages(obesity_cal):
@@ -562,7 +869,28 @@ def eligibility_across_ages(obesity_cal):
             age_distribution['65–69'] = age_distribution['60–69'] / 2
             del eligibility_frac_among_age['60–69']
             del age_distribution['60–69']
-    return eligibility_frac_among_age, age_distribution
+
+    # ----- eligibility by age ------------
+    eligible_by_age = defaultdict(dict)
+    for age in age_distribution:
+        eligible_by_age[age]['not_norm'] = age_distribution[age] * eligibility_frac_among_age[age]
+        eligible_by_age[age]['norm'] = (age_distribution[age] *
+                                        eligibility_frac_among_age[age] / obesity_cal.total_eligible_frac)
+
+    # ------ save results ----------------
+    utils.save_dfs(results_saving_path + 'eligibility_info.xlsx',
+                   [pd.DataFrame(obesity_cal.eligibility_among_bmi, index=[0]),
+                    obesity_cal.ecdf_age_group_bmi_distribution,
+                    pd.DataFrame(eligibility_frac_among_age, index=[0]),
+                    pd.DataFrame(age_distribution, index=[0]),
+                    pd.DataFrame(eligible_by_age)],
+                   ['eligible frac among cat',
+                    'bmi distribution by age',
+                    'eligible frac among age',
+                    'age distribution',
+                    'eligible by age'],
+                   [False, True, False, False, True])
+    return eligible_by_age, eligibility_frac_among_age, age_distribution
 
 
 def get_moving_results(no_access_bmi: np.array, current_bmi: np.array, eligible_bmi: np.array, obesity_cal: ObesityCal):
@@ -710,15 +1038,14 @@ def eligible_frac_by_insurance_under65(obesity_cal: ObesityCal):
             insurance_dict_norm, eligible_frac_obesity, eligible_frac_diabetes)
 
 
-def run_exp(obesity_cal, willingness_scenario, current_uptake_scenario, drug_weight_loss_scenario, hr_scenario):
-    scenario = (willingness_scenario + '_' + str(current_uptake_scenario) + '_' + str(drug_weight_loss_scenario) +
-                '_' + hr_scenario)
-    samples = obesity_cal.sampling(willingness_scenario=willingness_scenario,
-                                   drug_current_uptake_scenario=current_uptake_scenario,
-                                   drug_weight_loss_scenario=drug_weight_loss_scenario,
-                                   hr_scenario=hr_scenario)
+def run_exp(obesity_cal, scenario):
+    samples = obesity_cal.sampling(scenario=scenario)
     death_sampling_results = obesity_cal.get_death_summary('samples/' + scenario + '/', samples)
-    return scenario, samples, death_sampling_results
+    if scenario == 'base':
+        uptake_summary = obesity_cal.uptake_num_cal('samples/' + scenario + '/', samples)
+    else:
+        uptake_summary = None
+    return samples, death_sampling_results, uptake_summary
 
 
 def adjust_state_prevalence(non_adjust_prevalence: list, state_pop: list, pop_level_prevalence):

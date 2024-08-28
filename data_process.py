@@ -434,3 +434,73 @@ def willingness_and_adherence():
             data['base_adherence diabetes'],
             data['hypo_willingness'], data['hypo_adherence non diabetes'],
             data['hypo_adherence diabetes'])
+
+
+def healthcare_access(healthcare_access_year):
+    path = 'Data/Raw data/healthcare_access.xlsx'
+    average_data = pd.read_excel(path, sheet_name=str(healthcare_access_year) + '-average').iloc[0]
+    under65_access_data = pd.read_excel(path, sheet_name=str(healthcare_access_year) + '-under65')
+    under65_healthcare_usual_access = {}
+    for _, row in under65_access_data.iterrows():
+        under65_healthcare_usual_access[row['Type']] = row['Data'] * 0.01
+    return average_data['Usual'] * 0.01, under65_healthcare_usual_access
+
+
+def get_income_hr_raw():
+    path = 'Data/Raw data/income.xlsx'
+    hr_data = pd.read_excel(path, sheet_name='hr data')
+    hr_bound, hr_raw = [], []
+    for _, row in hr_data.iterrows():
+        hr_bound.append((row['low in 2022'], row['high in 2022']))
+        hr_raw.append(row['hr'])
+    return hr_bound, hr_raw
+
+
+def get_income_hr(hr_raw_bound, hr_raw, income_low, income_high):
+    for i in range(len(hr_raw_bound)):
+        if hr_raw_bound[i][0] <= income_low < hr_raw_bound[i][1]:
+            income_low_index = i
+        if hr_raw_bound[i][0] <= income_high < hr_raw_bound[i][1]:
+            income_high_index = i
+    if income_low_index == income_high_index:
+        return hr_raw[income_low_index]
+    else:
+        hr_list = []
+        income_range_list = []
+        for i in range(income_low_index, income_high_index + 1):
+            hr_list.append(hr_raw[i])
+            income_range_list.append(max(income_low, hr_raw_bound[i][0]) - min(income_high, hr_raw_bound[i][1]))
+        return sum(np.array(hr_list) * np.array(income_range_list)) / sum(income_range_list)
+
+
+def get_income_bmi_info(income_year):
+    path = 'Data/Raw data/income.xlsx'
+    # ----- get income info for income_year ---------
+    income_data = pd.read_excel(path, sheet_name='data-' + str(income_year))
+    income_low = []
+    income_high = []
+    income_percentage = []
+    income_overweight_prevalence = []
+    income_obesity_prevalence = []
+    for _, row in income_data.iterrows():
+        income_low.append(row['household income low'])
+        income_high.append(row['household income high'])
+        income_percentage.append(row['percentage'])
+        income_overweight_prevalence.append(row['overweight prevalence'])
+        income_obesity_prevalence.append(row['obesity prevalence'])
+
+    # ----- get raw hr data -----
+    hr_raw_bound, hr_raw = get_income_hr_raw()
+    hr = []
+    for i in range(len(income_low)):
+        hr.append(get_income_hr(hr_raw_bound, hr_raw, income_low[i], income_high[i]))
+    hr = np.array(hr)
+    hr = hr / hr[-1]
+
+    income_info = {'low': np.array(income_low),
+                   'high': np.array(income_high),
+                   'p': np.array(income_percentage) / sum(income_percentage),
+                   'overweight_p': np.array(income_overweight_prevalence) * 0.01,
+                   'obesity_p': np.array(income_obesity_prevalence) * 0.01,
+                   'hr': hr}
+    return income_info

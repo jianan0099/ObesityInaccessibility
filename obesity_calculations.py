@@ -8,9 +8,10 @@ import pickle
 
 
 class ObesityCal:
-    def __init__(self, mu_no_drug, demographics_year):
+    def __init__(self, mu_no_drug, demographics_year, healthcare_access_year):
         self.mu_no_drug = mu_no_drug
         self.demographics_year = demographics_year
+        self.healthcare_access_year = healthcare_access_year
 
         # ----------- sampling data --------------
         self.sex_age_group_sample_size = 1000
@@ -27,7 +28,9 @@ class ObesityCal:
         # ---------- demographics data ----------------------
         sex_age_distribution, self.adults_pop_size_frac = (
             data_process.get_sex_age_distribution(self.demographics_year))
-        self.P = round(data_process.get_total_pop(self.demographics_year) * self.adults_pop_size_frac)
+        # population size age >=18
+        total_pop = data_process.get_total_pop(self.demographics_year)
+        self.P = round(total_pop * self.adults_pop_size_frac)
         (self.BMI_related_data, self.age_groups, self.sex_age_groups, self.sex_age_distribution_list,
          self.age_distribution_list) = data_process.get_bmi_data(sex_age_distribution)
 
@@ -45,13 +48,30 @@ class ObesityCal:
         self.drug_eligibility, self.eligibility_among_bmi, self.total_eligible_frac = self.eligible_pop()
 
         # -------- init drug info and hr info------
-        self.init_drug_info('0', 'sema')
-        self.init_hr_info('white')
+        self.init_drug_info()
+        self.hr_all_bmi = data_process.get_hr_info_white(self.bmi_categorization)
+
+        # ------- income adjustment ----------
+        self.income_info = data_process.get_income_bmi_info(self.demographics_year)
+        self.C_income_all = self.income_distribution_among_bmi()
 
         # -------- willingness and persistence ----
         self.base_drug_willingness, self.base_adherence_non_d, self.base_adherence_d, \
             self.hypo_drug_willingness, self.hypo_adherence_non_d, self.hypo_adherence_d = (
                 data_process.willingness_and_adherence())
+
+        # -------- healthcare access -------
+        (self.usual_healthcare_access, self.under65_healthcare_usual_access) = (
+            data_process.healthcare_access(self.healthcare_access_year))
+
+    def income_distribution_among_bmi(self):
+        # income distribution among BMI categories
+        C_income_all = np.ones((self.num_bmi_cats, len(self.income_info['low']))) / len(self.income_info['low'])
+        C_income_overweight = self.income_info['p'] * self.income_info['overweight_p']
+        C_income_all[2:4, :] = C_income_overweight / sum(C_income_overweight)
+        C_income_obesity = self.income_info['p'] * self.income_info['obesity_p']
+        C_income_all[4:7, :] = C_income_obesity / sum(C_income_obesity)
+        return C_income_all
 
     def ecdf_diabetes_info(self):
         obesity_prevalence_ecdf = (self.ecdf_bmi_distribution['Obesity-grade1'] +
@@ -268,17 +288,28 @@ class ObesityCal:
         index_collection = []
         bmi_collection = []
 
-        # ----- moving due to drug use -------
+        # ----- moving due to drug usage -------
         for (drug_pop, pop_condition) in zip([drug_pop_with_d2, drug_pop_without_d2], ['d2', 'non-d2']):
             new_bmi_collection = self.bmi_count_after_losing_weight(drug_pop, pop_condition)
             index_collection += list(drug_pop)
             bmi_collection += new_bmi_collection
         return index_collection, bmi_collection
 
+    def income_moving_ratio(self, bmi_cat):
+        bmi_income_distribution = self.C_income_all[self.bmi_categorization.index(bmi_cat)]
+        moving_ratio_income = 2 - self.income_info['hr']
+        return np.sum(bmi_income_distribution * moving_ratio_income)
+
     def sample_drug_uptake(self, bmi_cat,
                            diabetes_drug_uptake_min, diabetes_drug_uptake_max,
-                           obesity_drug_uptake_min, obesity_drug_uptake_max):
-        pop_index = self.drug_elig_pop_index[bmi_cat]
+                           obesity_drug_uptake_min, obesity_drug_uptake_max,
+                           income_adjust):
+        if income_adjust:
+            pop_index_raw = self.drug_elig_pop_index[bmi_cat]
+            bmi_change_ratio_income = self.income_moving_ratio(bmi_cat)
+            pop_index = random.sample(list(pop_index_raw), round(bmi_change_ratio_income * len(pop_index_raw)))
+        else:
+            pop_index = self.drug_elig_pop_index[bmi_cat]
         # ----------- sample diabetes info ------------------------------------------------
         diabetes_prevalence_among_bmi = self.get_diabetes_prevalence_among_bmi(bmi_cat,
                                                                                self.no_access_BMI_distribution_info)
@@ -314,7 +345,7 @@ class ObesityCal:
         drug_pop_index_without_d2 = drug_pop_index[drug_pop_with_d2_num:]
 
         # -------- return index ---------------------------------------------------
-        return drug_pop_index_with_d2, drug_pop_index_without_d2
+        return drug_pop_index_with_d2, drug_pop_index_without_d2, d2_prevalence_among_bmi
 
     def complete_bmi_info(self, change_bmi_index, change_bmi_value):
         sample_BMI = np.array(self.pop_BMI)
@@ -328,7 +359,7 @@ class ObesityCal:
         sample_drug[pop_index_taking_obe] = 2
         return sample_drug
 
-    def sampling_single(self, drug_willingness, adherence_d, adherence_non_d):
+    def sampling_single(self, drug_willingness, adherence_d, adherence_non_d, income_adjust):
         # ------- get population sample -------------------------------------------
         self.population_info()
 
@@ -337,21 +368,41 @@ class ObesityCal:
         curr_dia, curr_obe = [], []
         eligible_bmi_index, eligible_bmi = [], []
         eligible_dia, eligible_obe = [], []
+        curr_d2_among_d = np.zeros(self.num_bmi_cats)
+        elig_d2_among_d = np.zeros(self.num_bmi_cats)
+        for bmi_cat_index in [0, 1]:
+            curr_d2_among_d[bmi_cat_index] = ((
+                self.get_diabetes_prevalence_among_bmi(self.bmi_categorization[bmi_cat_index],
+                                                       self.no_access_BMI_distribution_info)) *
+                                                  np.random.uniform(self.type2_diabetes_among_diabetes_min,
+                                                          self.type2_diabetes_among_diabetes_max))
+            elig_d2_among_d[bmi_cat_index] = (
+                self.get_diabetes_prevalence_among_bmi(self.bmi_categorization[bmi_cat_index],
+                                                       self.no_access_BMI_distribution_info) *
+                                                  np.random.uniform(self.type2_diabetes_among_diabetes_min,
+                                                          self.type2_diabetes_among_diabetes_max))
 
         for bmi_cat in self.drug_elig_pop_index:
             # -------- get population taking drugs and losing weight with and without type 2 diabetes ----------
-            current_drug_pop_with_d2, current_drug_pop_without_d2 = (
+            current_drug_pop_with_d2, current_drug_pop_without_d2, current_d2_among_bmi = (
                 self.sample_drug_uptake(bmi_cat,
                                         self.current_uptake_range['diabetes'][0] * adherence_d,
                                         self.current_uptake_range['diabetes'][1] * adherence_d,
                                         self.current_uptake_range['obesity'][0] * adherence_non_d,
-                                        self.current_uptake_range['obesity'][1] * adherence_non_d))
-            eligible_drug_pop_with_d2, eligible_drug_pop_without_d2 = (
+                                        self.current_uptake_range['obesity'][1] * adherence_non_d,
+                                        income_adjust))
+            eligible_drug_pop_with_d2, eligible_drug_pop_without_d2, eligible_d2_among_bmi = (
                 self.sample_drug_uptake(bmi_cat,
-                                        drug_willingness * adherence_d,
-                                        drug_willingness * adherence_d,
-                                        drug_willingness * adherence_non_d,
-                                        drug_willingness * adherence_non_d))
+                                        self.usual_healthcare_access * drug_willingness * adherence_d,
+                                        self.usual_healthcare_access * drug_willingness * adherence_d,
+                                        self.usual_healthcare_access * drug_willingness * adherence_non_d,
+                                        self.usual_healthcare_access * drug_willingness * adherence_non_d,
+                                        income_adjust))
+
+            # -------- drug eligibility info ------
+            bmi_cat_index = self.bmi_categorization.index(bmi_cat)
+            curr_d2_among_d[bmi_cat_index] = current_d2_among_bmi
+            elig_d2_among_d[bmi_cat_index] = eligible_d2_among_bmi
 
             # -------- drug taking info ------
             curr_dia += list(current_drug_pop_with_d2)
@@ -375,24 +426,21 @@ class ObesityCal:
             eligible_bmi += eligible_bmi_collection
 
         return (curr_bmi_index, curr_bmi, curr_dia, curr_obe,
-                eligible_bmi_index, eligible_bmi, eligible_dia, eligible_obe)
+                eligible_bmi_index, eligible_bmi, eligible_dia, eligible_obe,
+                curr_d2_among_d, elig_d2_among_d)
 
-    def init_drug_info(self, drug_uptake_scenario, drug_weight_loss_scenario):
+    def init_drug_info(self):
         (self.current_uptake_range, self.weight_loss_info, self.ratio_eff_min, self.ratio_eff_max,
          self.obesity_uptake_among_age) = (
-            data_process.get_drug_info(drug_uptake_scenario, drug_weight_loss_scenario,
+            data_process.get_drug_info('0', 'sema',
                                        self.age_groups,
                                        self.age_distribution_list,
                                        self.total_eligible_frac))
 
-    def init_hr_info(self, hr_scenario):
-        if hr_scenario == 'white':
-            self.hr_all_bmi = data_process.get_hr_info_white(self.bmi_categorization)
-
     @staticmethod
-    def read_samples(sample_path, willingness_scenario):
+    def read_samples(sample_path, scenario):
         if os.path.exists(sample_path):
-            if willingness_scenario == 'base':
+            if scenario == 'base':
                 samples = {'samples_sex': np.load(sample_path + 'samples_sex.npy'),
                            'samples_age': np.load(sample_path + 'samples_age.npy'),
                            'samples_weight': np.load(sample_path + 'samples_weight.npy'),
@@ -401,7 +449,9 @@ class ObesityCal:
                            'samples_current_BMI': np.load(sample_path + 'samples_current_BMI.npy'),
                            'samples_current_drug': np.load(sample_path + 'samples_current_drug.npy'),
                            'samples_eligible_BMI': np.load(sample_path + 'samples_eligible_BMI.npy'),
-                           'samples_eligible_drug': np.load(sample_path + 'samples_eligible_drug.npy')}
+                           'samples_eligible_drug': np.load(sample_path + 'samples_eligible_drug.npy'),
+                           'samples_d2_among_d_curr': np.load(sample_path + 'samples_d2_among_d_curr.npy'),
+                           'samples_d2_among_d_elig': np.load(sample_path + 'samples_d2_among_d_elig.npy')}
             else:
                 samples = {'samples_age': np.load(sample_path + 'samples_age.npy'),
                            'samples_no_access_BMI': np.load(sample_path + 'samples_no_access_BMI.npy'),
@@ -414,23 +464,33 @@ class ObesityCal:
             os.makedirs(sample_path)
             return None
 
-    def sampling(self, drug_current_uptake_scenario, drug_weight_loss_scenario, willingness_scenario, hr_scenario):
-        sample_path = 'samples/' + willingness_scenario + '_' + str(drug_current_uptake_scenario) + '_' + str(
-            drug_weight_loss_scenario) + '_' + hr_scenario + '/'
-        samples = self.read_samples(sample_path, willingness_scenario)
+    def sampling(self, scenario):
+        sample_path = 'samples/' + scenario + '/'
+        samples = self.read_samples(sample_path, scenario)
         if samples:
             return samples
-        # ---------- drug info & hr & willingness & adherence based on scenarios-----------
-        self.init_drug_info(drug_current_uptake_scenario, drug_weight_loss_scenario)
-        self.init_hr_info(hr_scenario)
-        if willingness_scenario == 'base':
+        # ---------- parameter settings based on scenarios-----------
+        if scenario == 'base':
+            # willingness and adherence
             drug_willingness, adherence_d, adherence_non_d = (self.base_drug_willingness,
                                                               self.base_adherence_d,
                                                               self.base_adherence_non_d)
-        if willingness_scenario == 'hypo':
+            # income
+            income_adjust = False
+        if scenario == 'cons':
+            # willingness and adherence
+            drug_willingness, adherence_d, adherence_non_d = (self.base_drug_willingness,
+                                                              self.base_adherence_d,
+                                                              self.base_adherence_non_d)
+            # income
+            income_adjust = True
+        if scenario == 'hypo':
+            # willingness and adherence
             drug_willingness, adherence_d, adherence_non_d = (self.hypo_drug_willingness,
                                                               self.hypo_adherence_d,
                                                               self.hypo_adherence_non_d)
+            # income
+            income_adjust = False
 
         # -------- sampling results -----------------------------------------
         samples_sex = []
@@ -442,12 +502,15 @@ class ObesityCal:
         samples_current_drug = []
         samples_eligible_BMI = []
         samples_eligible_drug = []
+        samples_d2_among_d_curr = []
+        samples_d2_among_d_elig = []
 
         for sample_step in range(self.sampling_times):
             # ----- get sample info --------------------------------------
             (sample_curr_bmi_index, sample_curr_bmi, sample_curr_dia, sample_curr_obe,
-             sample_eligible_bmi_index, sample_eligible_bmi, sample_eligible_dia, sample_eligible_obe) \
-                = self.sampling_single(drug_willingness, adherence_d, adherence_non_d)
+             sample_eligible_bmi_index, sample_eligible_bmi, sample_eligible_dia, sample_eligible_obe,
+             sample_curr_d2_among_d, sample_elig_d2_among_d) \
+                = self.sampling_single(drug_willingness, adherence_d, adherence_non_d, income_adjust)
             samples_sex.append(self.pop_sex)
             samples_age.append(self.pop_age)
             samples_weight.append(self.pop_weight)
@@ -457,6 +520,8 @@ class ObesityCal:
             samples_current_drug.append(self.complete_drug_info(sample_curr_dia, sample_curr_obe))
             samples_eligible_BMI.append(self.complete_bmi_info(sample_eligible_bmi_index, sample_eligible_bmi))
             samples_eligible_drug.append(self.complete_drug_info(sample_eligible_dia, sample_eligible_obe))
+            samples_d2_among_d_curr.append(sample_curr_d2_among_d)
+            samples_d2_among_d_elig.append(sample_elig_d2_among_d)
 
         # --------- save samples ----------------------
         samples = {'samples_sex': samples_sex,
@@ -467,12 +532,16 @@ class ObesityCal:
                    'samples_current_BMI': samples_current_BMI,
                    'samples_current_drug': samples_current_drug,
                    'samples_eligible_BMI': samples_eligible_BMI,
-                   'samples_eligible_drug': samples_eligible_drug
+                   'samples_eligible_drug': samples_eligible_drug,
+                   'samples_d2_among_d_curr': samples_d2_among_d_curr,
+                   'samples_d2_among_d_elig': samples_d2_among_d_elig
                    }
-        if willingness_scenario == 'base':
+        if scenario == 'base':
             np.save(sample_path + 'samples_sex.npy', samples_sex)
             np.save(sample_path + 'samples_weight.npy', samples_weight)
             np.save(sample_path + 'samples_height.npy', samples_height)
+            np.save(sample_path + 'samples_d2_among_d_curr.npy', samples_d2_among_d_curr)
+            np.save(sample_path + 'samples_d2_among_d_elig.npy', samples_d2_among_d_elig)
         np.save(sample_path + 'samples_age.npy', samples_age)
         np.save(sample_path + 'samples_no_access_BMI.npy', samples_no_access_BMI)
         np.save(sample_path + 'samples_current_BMI.npy', samples_current_BMI)
@@ -696,3 +765,32 @@ class ObesityCal:
         with open(summary_path, 'wb') as f:
             pickle.dump(summary_death, f)
         return summary_death
+
+    def uptake_num_cal(self, sample_path, samples):
+        summary_path = sample_path + '/uptake_summary.pkl'
+        if os.path.exists(summary_path):
+            with open(summary_path, 'rb') as f:
+                return pickle.load(f)
+
+        samples_age_info = samples['samples_age']
+        samples_curr_drug_info = samples['samples_current_drug']
+        samples_elig_drug_info = samples['samples_eligible_drug']
+        samples_age_uptake_num = {'curr_dia': defaultdict(list),
+                                  'curr_obe': defaultdict(list),
+                                  'elig_dia': defaultdict(list),
+                                  'elig_obe': defaultdict(list)}
+        for sample_i in range(len(samples_age_info)):
+            age_info = samples_age_info[sample_i]
+            curr_drug_info = samples_curr_drug_info[sample_i]
+            elig_drug_info = samples_elig_drug_info[sample_i]
+            for age_g in self.age_groups:
+                age_g_index = age_info == age_g
+                age_curr_drug_info = curr_drug_info[age_g_index]
+                age_elig_drug_info = elig_drug_info[age_g_index]
+                samples_age_uptake_num['curr_dia'][age_g].append(sum(age_curr_drug_info == 1))
+                samples_age_uptake_num['curr_obe'][age_g].append(sum(age_curr_drug_info == 2))
+                samples_age_uptake_num['elig_dia'][age_g].append(sum(age_elig_drug_info == 1))
+                samples_age_uptake_num['elig_obe'][age_g].append(sum(age_elig_drug_info == 2))
+        with open(summary_path, 'wb') as f:
+            pickle.dump(samples_age_uptake_num, f)
+        return samples_age_uptake_num

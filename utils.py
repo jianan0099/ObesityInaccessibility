@@ -130,3 +130,18 @@ def c_without_alpha(hex_, alpha_):
 
 def fmt(x):
     return '{:.1f}%'.format(x * 100)
+
+
+def number_with_comma(number):
+    modified_number = ''
+    number = str(number)
+    flag = 0
+    for i in range(len(number)-1, -1, -1):
+        flag += 1
+        if flag == 3 and i > 0:
+            flag = 0
+            modified_number = ',' + number[i] + modified_number
+        else:
+            modified_number = number[i] + modified_number
+    return modified_number
+
